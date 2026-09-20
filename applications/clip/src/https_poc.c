@@ -12,7 +12,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
-#include <fcntl.h>
 #include "https_poc.h"
 #include "at_server.h"
 #include "transport.h"
@@ -22,6 +21,11 @@
 
 #define CA_TAG 71
 #define MAX_FILE (8U * 1024U * 1024U)
+#define CONNECT_BUDGET_MS (CONFIG_NET_SOCKETS_CONNECT_TIMEOUT + \
+                           CONFIG_NET_SOCKETS_TLS_CONNECT_TIMEOUT)
+BUILD_ASSERT(CONFIG_NET_SOCKETS_CONNECT_TIMEOUT > 0 &&
+             CONFIG_NET_SOCKETS_TLS_CONNECT_TIMEOUT > 0 && CONNECT_BUDGET_MS <= 30000,
+             "HTTPS requires bounded TCP + TLS connection timeouts (at most 30 seconds)");
 static atomic_t active, cancelled, stage, last_error, bytes_sent;
 static atomic_t stalled;
 static K_MUTEX_DEFINE(socket_lock);
@@ -45,7 +49,7 @@ static struct upload_buffers {
 static char expected_hash[65];
 static size_t response_length, file_length, header_bytes;
 static bool response_final;
-static int response_status;
+static int response_status, response_error;
 
 /* Wall time uses libc time()/CLOCK_REALTIME; TLS timers use monotonic uptime. */
 mbedtls_ms_time_t mbedtls_ms_time(void) { return k_uptime_get(); }
@@ -194,16 +198,20 @@ static int header_fragment(struct http_parser *parser, const char *at, size_t le
 {
     ARG_UNUSED(parser); ARG_UNUSED(at);
     progress();
-    header_bytes += length;
-    return header_bytes > 4096 ? -EMSGSIZE : 0;
+    /* The SDK ignores parser-hook return values. Latch the error for the
+     * response callback (called for each receive buffer) and final check. */
+    if (length > 4096 - header_bytes) { response_error = -EMSGSIZE; }
+    else { header_bytes += length; }
+    return response_error;
 }
 
 static int receive_response(struct http_response *rsp, enum http_final_call final, void *user)
 {
     ARG_UNUSED(user);
     progress();
-    if (check_cancel()) { return check_cancel(); }
-    if (response_length + rsp->body_frag_len > 1024) { return -EMSGSIZE; }
+    if (!response_error) { response_error = check_cancel(); }
+    if (rsp->body_frag_len > 1024 - response_length) { response_error = -EMSGSIZE; }
+    if (response_error) { return response_error; }
     if (rsp->body_frag_len) {
         memcpy(response_body + response_length, rsp->body_frag_start, rsp->body_frag_len);
         response_length += rsp->body_frag_len;
@@ -233,12 +241,15 @@ static int upload(int sock)
     response_length = header_bytes = 0;
     response_final = false;
     response_status = 0;
+    response_error = 0;
     memset(response_body, 0, sizeof(response_body));
     int remaining = (int)(deadline - k_uptime_get());
     if (remaining <= 0) { return -ETIMEDOUT; }
     progress();
     int ret = http_client_req(sock, &req, remaining, NULL);
     memset(auth, 0, sizeof(auth));
+    /* The SDK also ignores the FINAL response callback's return value. */
+    if (response_error) { return response_error; }
     if (ret < 0) { return ret; }
     atomic_set(&stage, VERIFYING);
     if (!response_final || (response_status != 200 && response_status != 201)) { return -EBADMSG; }
@@ -278,27 +289,15 @@ static int tls_connect(void)
     OPTION(SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     OPTION(SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 #undef OPTION
-    /* Nonblocking connect bounds the TLS handshake and supports cancellation. */
-    if (zsock_fcntl(sock, F_SETFL, O_NONBLOCK) < 0) { ret = -errno; goto out; }
+    /* In this SDK, TLS connect performs blocking TCP connect and handshake.
+     * Use the explicit Kconfig timeouts, not POLLOUT (TCP writability does
+     * not prove the TLS handshake completed). Keep within the job deadline. */
+    if (deadline - k_uptime_get() < CONNECT_BUDGET_MS) { ret = -ETIMEDOUT; goto out; }
     atomic_set(&stage, TLS);
     ret = zsock_connect(sock, address->ai_addr, address->ai_addrlen);
-    if (ret < 0 && errno != EINPROGRESS && errno != EAGAIN) { ret = -errno; goto out; }
-    int64_t end = k_uptime_get() + 30000;
-    while (ret < 0) {
-        if ((ret = check_cancel()) != 0) { goto out; }
-        if (k_uptime_get() >= end) { ret = -ETIMEDOUT; goto out; }
-        struct zsock_pollfd fd = {.fd = sock, .events = ZSOCK_POLLOUT};
-        int count = zsock_poll(&fd, 1, 100);
-        if (count < 0) { ret = -errno; goto out; }
-        if (!count) { ret = -EINPROGRESS; continue; }
-        int error = 0; socklen_t len = sizeof(error);
-        if (zsock_getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len) < 0) { ret = -errno; goto out; }
-        if (error || (fd.revents & (ZSOCK_POLLERR | ZSOCK_POLLHUP | ZSOCK_POLLNVAL))) {
-            ret = error ? -error : -ECONNRESET; goto out;
-        }
-        ret = 0;
-    }
-    if (zsock_fcntl(sock, F_SETFL, 0) < 0) { ret = -errno; goto out; }
+    if (ret < 0) { ret = -errno; }
+    int cancel_ret = check_cancel();
+    if (cancel_ret) { ret = cancel_ret; }
 out:
     zsock_freeaddrinfo(address);
     if (ret < 0) { close_socket(sock); return ret; }

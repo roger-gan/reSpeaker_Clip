@@ -18,7 +18,7 @@ static K_SEM_DEFINE(ready_sem, 0, 1);
 static atomic_t got_ip;
 static atomic_t failure;
 static atomic_t radio_ready;
-static struct net_mgmt_event_callback events;
+static struct net_mgmt_event_callback wifi_events, ipv4_events;
 
 static void ready(bool value)
 {
@@ -29,7 +29,7 @@ static void ready(bool value)
 static void network_event(struct net_mgmt_event_callback *cb, uint64_t event,
                           struct net_if *iface)
 {
-    ARG_UNUSED(iface);
+    if (iface != net_if_get_first_wifi()) { return; }
     if (event == NET_EVENT_IPV4_DHCP_BOUND) {
         atomic_set(&got_ip, 1);
     } else if (event == NET_EVENT_WIFI_CONNECT_RESULT) {
@@ -44,10 +44,13 @@ int wifi_init(void)
 {
     struct net_if *iface = net_if_get_first_wifi();
     if (!iface) { return -ENODEV; }
-    net_mgmt_init_event_callback(&events, network_event,
-        NET_EVENT_WIFI_CONNECT_RESULT | NET_EVENT_WIFI_DISCONNECT_RESULT |
-        NET_EVENT_IPV4_DHCP_BOUND);
-    net_mgmt_add_event_callback(&events);
+    /* Zephyr matches layer and layer code exactly: L2 Wi-Fi and L3 IPv4
+     * events cannot share a callback mask. */
+    net_mgmt_init_event_callback(&wifi_events, network_event,
+        NET_EVENT_WIFI_CONNECT_RESULT | NET_EVENT_WIFI_DISCONNECT_RESULT);
+    net_mgmt_init_event_callback(&ipv4_events, network_event, NET_EVENT_IPV4_DHCP_BOUND);
+    net_mgmt_add_event_callback(&wifi_events);
+    net_mgmt_add_event_callback(&ipv4_events);
     wifi_ready_callback_t cb = {.wifi_ready_cb = ready};
     return register_wifi_ready_callback(cb, iface);
 }
