@@ -309,6 +309,11 @@ int clip_init(void)
         return err;
     }
 
+#ifdef CONFIG_CLIP_HTTPS_POC
+    err = usb_cdc_enable();
+    if (err) { return err; }
+#endif
+
     /* Clear status (battery_percent/charging set by battery_init) */
     g_ctx.status.recording_time = 0;
     g_ctx.status.free_space = 0;

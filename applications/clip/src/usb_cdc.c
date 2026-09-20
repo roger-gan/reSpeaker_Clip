@@ -36,7 +36,9 @@ USBD_DESC_CONFIG_DEFINE(clip_fs_cfg, "Default");
 USBD_CONFIGURATION_DEFINE(clip_fs_config, 0, 100, &clip_fs_cfg);
 
 /* MSC LUN: SD card */
+#ifdef CONFIG_USBD_MSC_CLASS
 USBD_DEFINE_MSC_LUN(sd_lun, "SD", "Seeed", "Clip SD", "1.00");
+#endif
 
 /* CDC ACM UART device */
 static const struct device *const cdc_dev =
@@ -187,12 +189,14 @@ int usb_cdc_init(void)
 		return err;
 	}
 
+#ifdef CONFIG_USBD_MSC_CLASS
 	err = usbd_register_class(&clip_usbd, "msc_0", USBD_SPEED_FS, 1);
 	if (err) {
 		LOG_ERR("MSC class: %d", err);
 		return err;
 	}
 
+#endif
 	/* Initialize USB device */
 	err = usbd_init(&clip_usbd);
 	if (err) {
@@ -231,12 +235,12 @@ int usb_cdc_enable(void)
 	}
 
 	/* Unmount SD card so host has exclusive access */
-	storage_cleanup();
+	if (IS_ENABLED(CONFIG_USBD_MSC_CLASS)) { storage_cleanup(); }
 
 	int err = usbd_enable(&clip_usbd);
 	if (err) {
 		LOG_ERR("usbd enable: %d", err);
-		storage_remount();
+		if (IS_ENABLED(CONFIG_USBD_MSC_CLASS)) { storage_remount(); }
 		return err;
 	}
 

@@ -37,11 +37,14 @@ static struct {
 
 /* Command registry */
 static struct {
-    const struct at_command *cmds[32];
+    const struct at_command *cmds[40];
     int count;
 } cmd_registry = { .count = 0 };
 
 /* Forward declarations */
+#ifdef CONFIG_CLIP_HTTPS_POC
+#include "https_poc.h"
+#endif
 static void at_server_thread_func(void *p1, void *p2, void *p3);
 
 /* Register an AT command */
@@ -51,7 +54,7 @@ int at_server_register_cmd(const struct at_command *cmd)
         return -EINVAL;
     }
 
-    if (cmd_registry.count >= 32) {
+    if (cmd_registry.count >= ARRAY_SIZE(cmd_registry.cmds)) {
         return -ENOMEM;
     }
 
@@ -128,6 +131,7 @@ static int parse_command(const char *input, size_t len,
                 p++;
             }
             size_t arg_len = p - arg_start;
+            if (arg_len >= 256) { return AT_ERR_PARAM; }
             memcpy(args, arg_start, arg_len);
             args[arg_len] = '\0';
         }
@@ -144,6 +148,7 @@ static int parse_command(const char *input, size_t len,
                 p++;
             }
             size_t arg_len = p - arg_start;
+            if (arg_len >= 256) { return AT_ERR_PARAM; }
             memcpy(args, arg_start, arg_len);
             args[arg_len] = '\0';
         } else {
@@ -228,7 +233,17 @@ static void process_command(struct at_queue_item *item)
         return;
     }
 
-    LOG_INF("AT command: %s type=%d args=%s", cmd_name, cmd_type, args);
+    /* Do not log arguments: commands may contain network credentials. */
+    LOG_INF("AT command: %s type=%d", cmd_name, cmd_type);
+
+#ifdef CONFIG_CLIP_HTTPS_POC
+    if (!https_poc_command_allowed(cmd_name)) {
+        create_json_response(false, "Unavailable in HTTPS experiment or busy", NULL,
+                             at_ctx.response_buffer, sizeof(at_ctx.response_buffer));
+        SEND_RESPONSE();
+        return;
+    }
+#endif
 
     /* Find command handler */
     struct at_cmd_ctx ctx = {

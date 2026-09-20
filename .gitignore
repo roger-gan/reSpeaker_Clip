@@ -18,6 +18,7 @@ Makefile
 # west
 .west/
 # Misc
+tools/https_poc/.local/
 *.swp
 *.swo
 *.swn

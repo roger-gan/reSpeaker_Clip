@@ -29,6 +29,9 @@
 #include "storage.h"
 #include "transfer.h"
 #include "usb_cdc.h"
+#ifdef CONFIG_CLIP_HTTPS_POC
+#include "https_poc.h"
+#endif
 #include "config.h"
 
 LOG_MODULE_REGISTER(clip_event, LOG_LEVEL_WRN); /* chatty event-flow logs */
@@ -156,6 +159,13 @@ static enum mgmt_cb_return mcumgr_dfu_cb(uint32_t event, enum mgmt_cb_return pre
                                           int32_t *rc, uint16_t *group, bool *abort_more,
                                           void *data, size_t data_size)
 {
+#ifdef CONFIG_CLIP_HTTPS_POC
+    /* This experiment uses bootloader USB recovery, not application DFU. */
+    if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED || event == MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK) {
+        *rc = MGMT_ERR_EBUSY;
+        return MGMT_CB_ERROR_RC;
+    }
+#endif
     if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED) {
         LOG_INF("OTA started");
         k_mutex_lock(&ota_mutex, K_FOREVER);
@@ -294,6 +304,9 @@ static void fg_save_work_handler(struct k_work *work)
  * storage_idle_poweroff(), closing the TOCTOU with the unlocked tick. */
 static bool clip_sd_busy(void)
 {
+#ifdef CONFIG_CLIP_HTTPS_POC
+    if (https_poc_active()) { return true; }
+#endif
     if ((enum clip_state)atomic_get(&g_state) != CLIP_STATE_IDLE) {
         return true;
     }
@@ -455,6 +468,14 @@ void clip_event_process(void)
             goto notify;
         }
 
+#ifdef CONFIG_CLIP_HTTPS_POC
+        if (https_poc_event(item.event, item.result,
+            current == CLIP_STATE_IDLE && !audio_is_recording() &&
+            !transfer_is_active() && !ota_in_progress)) {
+            goto notify;
+        }
+#endif
+
         /* Special case: recording blocked while WiFi active */
         if (current == CLIP_STATE_WIFI_SYNC && item.event == CLIP_EVENT_START) {
             LOG_INF("Recording blocked: WiFi active");
@@ -466,7 +487,7 @@ void clip_event_process(void)
         }
 
         /* Special case: recording blocked while USB MSC active */
-        if (usb_cdc_is_enabled() && item.event == CLIP_EVENT_START) {
+        if (IS_ENABLED(CONFIG_USBD_MSC_CLASS) && usb_cdc_is_enabled() && item.event == CLIP_EVENT_START) {
             LOG_INF("Recording blocked: USB MSC active");
             display_post_event(UI_EVENT_USB_BLOCKED);
             if (item.result) {

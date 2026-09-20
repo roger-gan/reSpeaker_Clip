@@ -13,6 +13,13 @@ menuconfig CLIP
 
 if CLIP
 
+config CLIP_HTTPS_POC
+	bool "Experimental USB-controlled HTTPS upload"
+	default n
+	help
+	  Station-only, stopped-recording upload. Uses CDC-only USB and disables
+	  application OTA during this experiment. Requires a supplied test CA.
+
 module = CLIP
 module-str = Clip Application
 source "subsys/logging/Kconfig.template.log_config"

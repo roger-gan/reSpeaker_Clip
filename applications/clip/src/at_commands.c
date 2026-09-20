@@ -32,6 +32,9 @@
 #include "display.h"
 #include "haptic.h"
 #include "usb_cdc.h"
+#ifdef CONFIG_CLIP_HTTPS_POC
+#include "https_poc.h"
+#endif
 
 LOG_MODULE_REGISTER(at_commands, CONFIG_CLIP_LOG_LEVEL);
 
@@ -878,7 +881,7 @@ static int cmd_start_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
                 return create_json_response(false, "WiFi active, cannot record",
                                            NULL, response, len);
             }
-            if (usb_cdc_is_enabled()) {
+            if (IS_ENABLED(CONFIG_USBD_MSC_CLASS) && usb_cdc_is_enabled()) {
                 return create_json_response(false, "USB MSC active, disable USB first",
                                            NULL, response, len);
             }
@@ -1782,6 +1785,11 @@ static int cmd_usb_handler(struct at_cmd_ctx *ctx, char *response, size_t len)
 int at_commands_register(void)
 {
     int err;
+
+#ifdef CONFIG_CLIP_HTTPS_POC
+    err = https_poc_register();
+    if (err) return err;
+#endif
 
     k_work_init_delayable(&reboot_work, reboot_work_handler);
     k_work_init_delayable(&pair_reset_work, pair_reset_work_handler);
