@@ -31,6 +31,17 @@ choice MCUBOOT_MODE
 endchoice
 
 # Dual-image update: application core + network core, staged in external flash.
+config CLIP_WIFI_PATCH_FACTORY_ONLY
+	bool "Factory-provisioned external WiFi patch (no patch DFU)"
+	depends on WIFI_PATCHES_EXT_FLASH_STORE
+	help
+	  Experimental SPI NOR patch storage without a third MCUboot image pair.
+	  Provision the matching raw patch separately before starting WiFi.
+	  Disable patch inclusion in DFU ZIP and multi-image packages.
+
+config MCUBOOT_WIFI_PATCHES_HAS_UPDATE_SLOT
+	default n if CLIP_WIFI_PATCH_FACTORY_ONLY
+
 config MCUBOOT_UPDATEABLE_IMAGES
 	default 2
 config MCUBOOT_NRF53_MULTI_IMAGE_UPDATE

@@ -1,6 +1,6 @@
 # Static Partition Manager configuration for Clip nRF5340
 # 2-image MCUboot: App core + Network core
-# WiFi firmware stored in internal flash (not ext flash)
+# Experimental WiFi firmware storage in external SPI flash.
 #
 # Internal flash layout (1MB = 1024KB total):
 #   0x000000 - 0x015fff : mcuboot (88KB)
@@ -10,7 +10,10 @@
 # External flash layout:
 #   0x000000 - 0x0effff : mcuboot_secondary (app OTA slot, 960KB=15x64KB, 64KB-aligned)
 #   0x0f0000 - 0x12ffff : mcuboot_secondary_1 (netcore OTA slot, 256KB=4x64KB, 64KB-aligned)
-#   0x130000 - end      : lfs-storage (LittleFS for config, ~6.8MB=109x64KB, 64KB-aligned)
+#   0x130000 - 0x7dffff : lfs-storage (107 x 64KB)
+#   0x7e0000 - 0x7fffff : nrf70_wifi_fw (128KB, separately provisioned)
+# Existing LittleFS must be backed up and migrated/recreated before using this
+# reduced layout. Do not flash this experiment as an ordinary in-place update.
 
 # ============================================================
 # Internal flash (flash_primary)
@@ -57,7 +60,7 @@ mcuboot_primary_1:
   region: ram_flash
 
 # ============================================================
-# External flash (PY25Q64H) -- DFU secondary slots only
+# External flash (PY25Q64H) -- DFU, LittleFS and WiFi patch
 # ============================================================
 
 # DFU secondary slot for app (image 0) -- 960KB = 15x64KB, clip.signed.bin fits (892136B < 983040B)
@@ -78,6 +81,12 @@ mcuboot_secondary_1:
 # LittleFS storage partition on external flash
 lfs_storage:
   address: 0x130000
-  size: 0x6d0000
+  size: 0x6b0000
+  device: DT_CHOSEN(nordic_pm_ext_flash)
+  region: external_flash
+
+nrf70_wifi_fw:
+  address: 0x7e0000
+  size: 0x20000
   device: DT_CHOSEN(nordic_pm_ext_flash)
   region: external_flash

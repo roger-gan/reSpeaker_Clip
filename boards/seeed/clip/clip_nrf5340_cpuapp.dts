@@ -323,14 +323,17 @@
 				reg = <0x000F0000 0x00040000>;
 			};
 
-			/* LittleFS partition (~6.8MB, 64KB aligned)
-			 * External flash: 8MB = 128 x 64KB blocks total
-			 * OTA slots: 15 + 4 = 19 blocks used
-			 * LittleFS: 128 - 19 = 109 blocks = 6960KB = 0x6D0000
+			/* Experimental layout: back up and migrate/recreate existing
+			 * LittleFS before shrinking it. Last 128KB holds the WiFi patch.
 			 */
 			lfs_partition: partition@130000 {
 				label = "lfs-storage";
-				reg = <0x00130000 0x006D0000>;
+				reg = <0x00130000 0x006B0000>;
+			};
+
+			nrf70_wifi_fw_partition: partition@7e0000 {
+				label = "nrf70-wifi-fw";
+				reg = <0x007E0000 0x00020000>;
 			};
 		};
 	};

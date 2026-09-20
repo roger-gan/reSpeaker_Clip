@@ -20,6 +20,13 @@ if(NOT BOARD MATCHES "^clip")
   return()
 endif()
 
+if(SB_CONFIG_CLIP_WIFI_PATCH_FACTORY_ONLY AND
+   (SB_CONFIG_DFU_ZIP_WIFI_FW_PATCH OR SB_CONFIG_DFU_MULTI_IMAGE_PACKAGE_WIFI_FW_PATCH))
+  message(FATAL_ERROR
+    "Factory-only WiFi patch storage has no MCUboot patch slots. "
+    "Disable patch DFU packaging or implement a complete patch-update layout.")
+endif()
+
 set(_clip_sysbuild_dir "${SYSBUILD_CURRENT_MODULE_DIR}/boards/seeed/clip/sysbuild")
 
 # Custom MCUboot config (OLED, USB CDC serial recovery, custom mcumgr commands,
