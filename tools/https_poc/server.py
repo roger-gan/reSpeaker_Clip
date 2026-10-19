@@ -33,6 +33,16 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(15)
 
+    def handle(self):
+        # Handshake in this connection's worker, after setting its timeout.
+        # Handshaking in accept() lets one idle TCP peer block all uploads.
+        if isinstance(self.connection, ssl.SSLSocket):
+            try:
+                self.connection.do_handshake()
+            except OSError:
+                return
+        super().handle()
+
     def log_message(self, fmt, *args):
         # Never log URLs, headers, tokens or request payloads.
         pass
@@ -147,7 +157,8 @@ def main():
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(args.cert, args.key)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.socket = context.wrap_socket(server.socket, server_side=True,
+                                       do_handshake_on_connect=False)
     print(f"HTTPS receiver listening on {args.bind}:{args.port}", flush=True)
     try:
         server.serve_forever()

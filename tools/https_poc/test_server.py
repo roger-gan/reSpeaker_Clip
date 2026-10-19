@@ -1,7 +1,9 @@
 import hashlib
 import http.client
+import json
 from pathlib import Path
 import ssl
+import socket
 import tempfile
 import threading
 import time
@@ -27,7 +29,8 @@ class ReceiverTest(unittest.TestCase):
         tls.minimum_version = ssl.TLSVersion.TLSv1_2
         tls.load_cert_chain(cert, key)
         cls.server_context = tls
-        cls.server.socket = tls.wrap_socket(cls.server.socket, server_side=True)
+        cls.server.socket = tls.wrap_socket(cls.server.socket, server_side=True,
+                                            do_handshake_on_connect=False)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
 
@@ -43,7 +46,8 @@ class ReceiverTest(unittest.TestCase):
                    "X-Content-SHA256": hashlib.sha256(body).hexdigest(),
                    "Content-Length": str(len(body))}
         headers.update(overrides or {})
-        conn = http.client.HTTPSConnection("localhost", port or self.server.server_port, context=self.context)
+        conn = http.client.HTTPSConnection("localhost", port or self.server.server_port,
+                                           context=self.context, timeout=3)
         try:
             conn.request("PUT", path or f"/v1/devices/clip-test/recordings/session/{segment}", body, headers)
             response = conn.getresponse()
@@ -55,6 +59,46 @@ class ReceiverTest(unittest.TestCase):
         self.assertEqual(self.request(1)[0], 201)
         self.assertEqual(self.request(1)[0], 200)
         self.assertEqual(self.request(1, b"different")[0], 409)
+
+    def test_idle_tcp_client_does_not_block_upload(self):
+        # A USB test client or network probe can open TCP without starting TLS.
+        # It must not block every other client in the server's accept loop.
+        with socket.create_connection(("127.0.0.1", self.server.server_port), timeout=3):
+            self.assertEqual(self.request(10)[0], 201)
+
+    def test_saved_bytes_and_receipt(self):
+        body = bytes(range(256)) * 31
+        status, response = self.request(11, body)
+        self.assertEqual(status, 201)
+        receipt = json.loads(response)
+        self.assertEqual(receipt["status"], "stored")
+        self.assertEqual(receipt["size"], len(body))
+        self.assertEqual(receipt["sha256"], hashlib.sha256(body).hexdigest())
+        self.assertEqual((self.server.directory / (receipt["object_id"] + ".bin")).read_bytes(), body)
+
+    def test_bad_hash_leaves_no_object_and_retry_works(self):
+        identity = hashlib.sha256(b"clip-test/session/12").hexdigest()
+        target = self.server.directory / (identity + ".bin")
+        self.assertEqual(self.request(12, overrides={"X-Content-SHA256": "0" * 64})[0], 422)
+        self.assertFalse(target.exists())
+        self.assertEqual(self.request(12)[0], 201)
+
+    def test_concurrent_conflicting_content(self):
+        bodies = [b"first recording", b"different recording"]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda body: self.request(13, body)[0], bodies))
+        self.assertEqual(sorted(results), [201, 409])
+        winner = bodies[results.index(201)]
+        self.assertEqual(self.request(13, winner)[0], 200)
+
+    def test_twenty_fresh_tls_uploads(self):
+        for segment in range(100, 120):
+            body = f"recording-{segment}".encode()
+            status, response = self.request(segment, body)
+            self.assertEqual(status, 201)
+            receipt = json.loads(response)
+            self.assertEqual(receipt["sha256"], hashlib.sha256(body).hexdigest())
+            self.assertEqual((self.server.directory / (receipt["object_id"] + ".bin")).read_bytes(), body)
 
     def test_auth_and_identity(self):
         self.assertEqual(self.request(2, overrides={"Authorization": "Bearer wrong"})[0], 401)
@@ -100,7 +144,8 @@ class ReceiverTest(unittest.TestCase):
         self.assertEqual(self.request(7)[0], 201)
         # A fresh receiver has no in-memory knowledge of the previous upload.
         other = Receiver(("127.0.0.1", 0), self.server.directory, "clip-test", self.token)
-        other.socket = self.server_context.wrap_socket(other.socket, server_side=True)
+        other.socket = self.server_context.wrap_socket(other.socket, server_side=True,
+                                                       do_handshake_on_connect=False)
         thread = threading.Thread(target=other.serve_forever, daemon=True)
         thread.start()
         try:

@@ -33,7 +33,10 @@ def exchange(fd, command):
                 result = json.loads(line)
             except (ValueError, UnicodeDecodeError):
                 continue
-            if not result.get("ok"):
+            if (not isinstance(result, dict) or "event" in result
+                    or type(result.get("ok")) is not bool):
+                continue
+            if not result["ok"]:
                 raise RuntimeError(f"device rejected command: {result}")
             return result
     raise TimeoutError("AT response timeout")
